@@ -46,6 +46,12 @@ const stopTimer = async (record: TimeRecord) => {
 };
 
 const createRecord = async (description: string) => {
+  // Check for and close any active task
+  const latestRecord = await getLatestTimeRecord();
+  if (latestRecord && latestRecord.t1 === latestRecord.t2) {
+    await stopTimer(latestRecord);
+  }
+
   const record: Omit<TimeRecord, "st"> = {
     key: Bun.randomUUIDv7(),
     ds: description,
