@@ -138,7 +138,7 @@ discord.on("messageCreate", async (message) => {
   if (message.author.id === discord.user!.id) return;
   console.log(message.content);
   outstandingMessages = 0;
-  await createRecord(message.content);
+  await createRecord(message.content.replace(/\\#/g, "#"));
   await message.reply("Record created.");
 });
 
