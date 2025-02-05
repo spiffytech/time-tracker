@@ -12,6 +12,7 @@
   "dependencies": {
     "discord.js": "^14.17.3",
     "kysely": "^0.27.5",
-    "kysely-bun-worker": "^1.0.0"
+    "kysely-bun-worker": "^1.0.0",
+    "temporal-polyfill": "^0.2.5"
   }
 }
