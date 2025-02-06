@@ -1,3 +1,4 @@
+import * as assert from "assert";
 import {
   Client as Discord,
   GatewayIntentBits,
@@ -24,7 +25,10 @@ const getTimeRecords = async (): Promise<TimeRecord[]> => {
     },
   });
 
-  return (await response.json()).records as TimeRecord[];
+  const records = (await response.json()).records as TimeRecord[];
+  // Deleted records begin with HIDDEN. Leaving them in messes up our looking
+  // for the most recent record.
+  return records.filter((r) => !r.ds.startsWith("HIDDEN"));
 };
 
 const getLatestTimeRecord = async (): Promise<TimeRecord> => {
@@ -45,20 +49,15 @@ const stopTimer = async (record: TimeRecord) => {
   });
 };
 
-const createRecord = async (description: string) => {
+const createRecord = async (
+  latestRecord: TimeRecord | null,
+  newRecords: Omit<TimeRecord, "st">[]
+) => {
   // Check for and close any active task
-  const latestRecord = await getLatestTimeRecord();
   if (latestRecord && latestRecord.t1 === latestRecord.t2) {
     await stopTimer(latestRecord);
   }
 
-  const record: Omit<TimeRecord, "st"> = {
-    key: Bun.randomUUIDv7(),
-    ds: description,
-    t1: new Date().getTime() / 1_000,
-    t2: new Date().getTime() / 1_000,
-    mt: new Date().getTime() / 1_000,
-  };
   const url = new URL("https://timetagger.app/api/v2/records");
   url.searchParams.append("timerange", `0-${new Date().getTime() / 1_000}`);
   const response = await fetch(url, {
@@ -66,7 +65,7 @@ const createRecord = async (description: string) => {
     headers: {
       authtoken: process.env.timetaggerKey!,
     },
-    body: JSON.stringify([record]),
+    body: JSON.stringify(newRecords),
   });
 };
 
@@ -85,8 +84,6 @@ const enqueueNextMessage = () => {
   const offsetMs = offsetMinutes * 60 * 1000;
   setTimeout(() => interrogateUser(), offsetMs);
 };
-
-console.log((await getTimeRecords()).at(-1));
 
 const discord = new Discord({
   intents: [
@@ -134,12 +131,72 @@ const interrogateUser = async () => {
   enqueueNextMessage();
 };
 
+const extractTimeLogsFromMessage = (
+  latestRecord: TimeRecord | null,
+  text: string
+): Omit<TimeRecord, "st">[] => {
+  const lines = text.split("\n");
+  const linesWithMinutes = lines.map((line) => {
+    const match = line.match(/((?<minutes>\d+)\s+)?(?<description>.*)/);
+    return {
+      minutes: match!.groups!.minutes,
+      description: match!.groups!.description,
+    };
+  });
+  const matchCount = linesWithMinutes.filter(
+    (line) => line.minutes !== undefined
+  ).length;
+  if (matchCount < lines.length - 1) {
+    throw new Error("Not enough lines specified their duration");
+  }
+  const minutesTotal = linesWithMinutes.reduce(
+    (acc, item) => acc + parseFloat(item.minutes ?? "0"),
+    0
+  );
+  if (latestRecord && latestRecord.t1 === latestRecord.t2) {
+    console.log("Updating last record");
+    latestRecord = {
+      ...latestRecord,
+      t2: Temporal.Now.instant().epochSeconds,
+    };
+  }
+  // For now, just ignore whether this is before or after the start time of the
+  // last record. We'll just do overlapping records.
+  let recordStart = Temporal.Now.instant().subtract({ minutes: minutesTotal });
+  const records: Omit<TimeRecord, "st">[] = linesWithMinutes.map(
+    ({ minutes, description }) => {
+      const t1 = recordStart.epochSeconds;
+      recordStart = recordStart.add({ minutes: parseFloat(minutes ?? "0") });
+      const t2 = recordStart.epochSeconds;
+      return {
+        key: Bun.randomUUIDv7(),
+        ds: description,
+        t1,
+        t2,
+        mt: t2,
+      };
+    }
+  );
+  if (latestRecord) {
+    records.unshift(latestRecord);
+  }
+  return records;
+};
+
 discord.on("messageCreate", async (message) => {
   if (message.author.id === discord.user!.id) return;
   console.log(message.content);
   outstandingMessages = 0;
-  await createRecord(message.content.replace(/\\#/g, "#"));
-  await message.reply("Record created.");
+  const content = message.content.replace(/\\#/g, "#");
+  const latestRecord = await getLatestTimeRecord();
+  try {
+    const records = extractTimeLogsFromMessage(latestRecord, content);
+    await createRecord(latestRecord, records);
+    await message.reply("Record created.");
+  } catch {
+    await message.reply("Not enough lines specified their duration.");
+  }
 });
 
 enqueueNextMessage();
+await interrogateUser();
