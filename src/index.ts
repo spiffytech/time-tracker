@@ -186,6 +186,7 @@ const extractTimeLogsFromMessage = (
 discord.on("messageCreate", async (message) => {
   if (message.author.id === discord.user!.id) return;
   console.log(message.content);
+  const hasDisabledMessaging = outstandingMessages >= 3;
   outstandingMessages = 0;
   const content = message.content.replace(/\\#/g, "#");
   const latestRecord = await getLatestTimeRecord();
@@ -193,6 +194,9 @@ discord.on("messageCreate", async (message) => {
     const records = extractTimeLogsFromMessage(latestRecord, content);
     await createRecord(latestRecord, records);
     await message.reply("Record created.");
+    if (hasDisabledMessaging) {
+      enqueueNextMessage();
+    }
   } catch {
     await message.reply("Not enough lines specified their duration.");
   }
