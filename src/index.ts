@@ -1,10 +1,4 @@
-import * as assert from "assert";
-import {
-  Client as Discord,
-  GatewayIntentBits,
-  Partials,
-  Events,
-} from "discord.js";
+import { Client as Discord, GatewayIntentBits, Partials } from "discord.js";
 import { Temporal } from "temporal-polyfill";
 
 interface TimeRecord {
@@ -79,10 +73,25 @@ function randomSampleTime(mean = 15, stdDev = 2) {
   return mean + z * stdDev;
 }
 
+let nextInterrogationTimer: ReturnType<typeof setTimeout> | null = null;
+
 const enqueueNextMessage = () => {
+  // Clear any existing timer
+  if (nextInterrogationTimer !== null) {
+    clearTimeout(nextInterrogationTimer);
+    nextInterrogationTimer = null;
+  }
+
   const offsetMinutes = randomSampleTime();
   const offsetMs = offsetMinutes * 60 * 1000;
-  setTimeout(() => interrogateUser(), offsetMs);
+  console.log(
+    `Scheduling next interrogation in ${offsetMinutes.toFixed(2)} minutes`
+  );
+
+  nextInterrogationTimer = setTimeout(() => {
+    nextInterrogationTimer = null;
+    interrogateUser();
+  }, offsetMs);
 };
 
 const discord = new Discord({
@@ -125,6 +134,7 @@ const interrogateUser = async () => {
         outstandingMessages = 0;
         break;
     }
+    enqueueNextMessage();
   });
 
   outstandingMessages += 1;
@@ -186,7 +196,7 @@ const extractTimeLogsFromMessage = (
 discord.on("messageCreate", async (message) => {
   if (message.author.id === discord.user!.id) return;
   console.log(message.content);
-  const hasDisabledMessaging = outstandingMessages >= 3;
+  const wasMessagingDisabled = outstandingMessages >= 3;
   outstandingMessages = 0;
   const content = message.content.replace(/\\#/g, "#");
   const latestRecord = await getLatestTimeRecord();
@@ -194,7 +204,10 @@ discord.on("messageCreate", async (message) => {
     const records = extractTimeLogsFromMessage(latestRecord, content);
     await createRecord(latestRecord, records);
     await message.reply("Record created.");
-    if (hasDisabledMessaging) {
+
+    // Only schedule a new message if messaging was previously disabled and we don't have one scheduled
+    if (wasMessagingDisabled && nextInterrogationTimer === null) {
+      console.log("Messaging was disabled, scheduling next interrogation");
       enqueueNextMessage();
     }
   } catch {
